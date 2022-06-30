@@ -22,6 +22,15 @@ type MapJob struct {
 	ReducerCount int
 }
 
+type MapJobCompleted struct {
+	InputFile         string
+	IntermediateFiles []string
+}
+
+type MapJobCompletedRes struct {
+	Completed bool
+}
+
 type ExampleArgs struct {
 	X int
 }

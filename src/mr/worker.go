@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
@@ -33,10 +34,13 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	job := RequestMapJob()
-	Map(job.InputFile, job.ReducerCount, mapf)
+	intFiles := Map(job.InputFile, job.ReducerCount, job.MapJobNumber, mapf)
+	if len(intFiles) > 0 {
+		ReportMapJobCompleted(job.InputFile, intFiles)
+	}
 }
 
-func Map(filename string, reduceCount int, mapf func(string, string) []KeyValue) {
+func Map(filename string, reduceCount int, mapJobNo int, mapf func(string, string) []KeyValue) []string {
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("cannot open %v", filename)
@@ -52,6 +56,22 @@ func Map(filename string, reduceCount int, mapf func(string, string) []KeyValue)
 		partitionKey := ihash(v.Key) % reduceCount
 		partitionedKva[partitionKey] = append(partitionedKva[partitionKey], v)
 	}
+	intermediatefiles := make([]string, 0)
+	for i, v := range partitionedKva {
+		// mr - map job number - partition key
+		intermediateFile := fmt.Sprintf("mr-%d-%d", mapJobNo, i)
+		ofile, _ := os.Create(intermediateFile)
+		enc := json.NewEncoder(ofile)
+		for _, kv := range v {
+			err := enc.Encode(&kv)
+			if err != nil {
+				fmt.Printf("error %+v", err)
+				break
+			}
+		}
+		intermediatefiles = append(intermediatefiles, intermediateFile)
+	}
+	return intermediatefiles
 }
 
 func RequestMapJob() MapJob {
@@ -60,6 +80,15 @@ func RequestMapJob() MapJob {
 	reply := MapJob{}
 	call("Coordinator.GetMapJob", &args, &reply)
 	fmt.Printf("reply--> %+v \n\n", reply)
+	return reply
+}
+
+func ReportMapJobCompleted(filename string, intFiles []string) MapJobCompletedRes {
+	args := MapJobCompleted{}
+	args.InputFile = filename
+	args.IntermediateFiles = intFiles
+	reply := MapJobCompletedRes{}
+	call("Coordinator.MapJobCompleted", &args, &reply)
 	return reply
 }
 
