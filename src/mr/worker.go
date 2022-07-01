@@ -8,7 +8,17 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
+	"time"
 )
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // Map functions return a slice of KeyValue.
@@ -33,11 +43,80 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	job := RequestMapJob()
-	intFiles := Map(job.InputFile, job.ReducerCount, job.MapJobNumber, mapf)
-	if len(intFiles) > 0 {
-		ReportMapJobCompleted(job.InputFile, intFiles)
+	for {
+		job := RequestMapJob()
+		if job.AllCompleted {
+			break
+		}
+		if len(job.InputFile) <= 0 {
+			time.Sleep(time.Second)
+			continue
+		}
+		intFiles := Map(job.InputFile, job.ReducerCount, job.MapJobNumber, mapf)
+		if len(intFiles) > 0 {
+			ReportMapJobCompleted(job.InputFile, intFiles)
+		}
 	}
+
+	for {
+		job := RequestReduceJob()
+		if job.AllCompleted {
+			break
+		}
+
+		if len(job.IntermediateFiles) <= 0 {
+			time.Sleep(time.Second)
+			continue
+		}
+		Reduce(job.IntermediateFiles, job.PartitionKey, reducef)
+		ReportReduceJobCompleted(job.PartitionKey)
+	}
+}
+
+func Reduce(files []string, partitionKey int, reducef func(string, []string) string) {
+	intermediate := []KeyValue{}
+
+	for _, filename := range files {
+		file, err := os.Open(filename)
+		if err != nil {
+			log.Fatalf("cannot open %v", filename)
+		}
+
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			intermediate = append(intermediate, kv)
+		}
+	}
+
+	sort.Sort(ByKey(intermediate))
+	oname := fmt.Sprintf("mr-out-%d", partitionKey)
+	ofile, _ := ioutil.TempFile(".", "temp-")
+
+	//
+	// call Reduce on each distinct key in intermediate[],
+	// and print the result to mr-out-X.
+	//
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		output := reducef(intermediate[i].Key, values)
+		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+		i = j
+	}
+
+	os.Rename(ofile.Name(), oname)
+	ofile.Close()
 }
 
 func Map(filename string, reduceCount int, mapJobNo int, mapf func(string, string) []KeyValue) []string {
@@ -74,6 +153,15 @@ func Map(filename string, reduceCount int, mapJobNo int, mapf func(string, strin
 	return intermediatefiles
 }
 
+func RequestReduceJob() ReduceJob {
+	args := ExampleArgs{}
+
+	reply := ReduceJob{}
+	call("Coordinator.GetReduceJob", &args, &reply)
+	fmt.Printf("reply--> %+v \n\n", reply)
+	return reply
+}
+
 func RequestMapJob() MapJob {
 	args := ExampleArgs{}
 
@@ -83,12 +171,20 @@ func RequestMapJob() MapJob {
 	return reply
 }
 
-func ReportMapJobCompleted(filename string, intFiles []string) MapJobCompletedRes {
+func ReportMapJobCompleted(filename string, intFiles []string) JobCompletedRes {
 	args := MapJobCompleted{}
 	args.InputFile = filename
 	args.IntermediateFiles = intFiles
-	reply := MapJobCompletedRes{}
+	reply := JobCompletedRes{}
 	call("Coordinator.MapJobCompleted", &args, &reply)
+	return reply
+}
+
+func ReportReduceJobCompleted(partitionKey int) JobCompletedRes {
+	args := ReduceJobCompleted{}
+	args.PartitionKey = partitionKey
+	reply := JobCompletedRes{}
+	call("Coordinator.ReduceJobCompleted", &args, &reply)
 	return reply
 }
 

@@ -1,13 +1,13 @@
 package mr
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -17,15 +17,37 @@ type Coordinator struct {
 	mapTaskId         int
 	reduceStatus      map[int]int
 	nReducer          int
-	intermediateFiles map[string][]string
+	intermediateFiles map[int][]string
 	mu                sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
+func (c *Coordinator) GetReduceJob(args *ExampleArgs, reply *ReduceJob) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for k, v := range c.reduceStatus {
+		if v == 0 {
+			c.reduceStatus[k] = 1
+			reply.IntermediateFiles = c.intermediateFiles[k]
+			reply.PartitionKey = k
+			return nil
+		}
+	}
+
+	reply.AllCompleted = c.isReduceJobsCompleted()
+	fmt.Printf("RedStatus>>>> %+v\n\n", c.reduceStatus)
+	fmt.Printf("RedReply>>>>> %+v\n\n", reply)
+	return nil
+}
 
 func (c *Coordinator) GetMapJob(args *ExampleArgs, reply *MapJob) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	for k, v := range c.mapStatus {
 		if v == 0 {
+			c.mapStatus[k] = 1
 			reply.InputFile = k
 			c.mapTaskId += 1
 			reply.MapJobNumber = c.mapTaskId
@@ -33,17 +55,39 @@ func (c *Coordinator) GetMapJob(args *ExampleArgs, reply *MapJob) error {
 			return nil
 		}
 	}
-	return errors.New("map job not available")
+	reply.AllCompleted = c.isMapJobsCompleted()
+	fmt.Printf("Status>>>> %+v\n\n", c.mapStatus)
+	fmt.Printf("Reply>>>>> %+v\n\n", reply)
+	// return errors.New("map job not available")
+	return nil
 }
 
-func (c *Coordinator) MapJobCompleted(args *MapJobCompleted, reply *MapJobCompletedRes) error {
-	fmt.Printf("Job Completed %+v", args)
+func (c *Coordinator) isMapJobsCompleted() bool {
+	for _, v := range c.mapStatus {
+		if v != 2 {
+			return false
+		}
+	}
+	fmt.Printf("mjc--> %+v \n\n", c.intermediateFiles)
+	return true
+}
+
+func (c *Coordinator) isReduceJobsCompleted() bool {
+	for _, v := range c.reduceStatus {
+		if v != 2 {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Coordinator) MapJobCompleted(args *MapJobCompleted, reply *JobCompletedRes) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.mapStatus[args.InputFile] = 1
+	c.mapStatus[args.InputFile] = 2
 	for _, v := range args.IntermediateFiles {
 		arr := strings.Split(v, "-")
-		partitionKey := arr[len(arr)-1]
+		partitionKey, _ := strconv.Atoi(arr[len(arr)-1])
 		if val, ok := c.intermediateFiles[partitionKey]; ok {
 			newArr := append(val, v)
 			c.intermediateFiles[partitionKey] = newArr
@@ -54,7 +98,14 @@ func (c *Coordinator) MapJobCompleted(args *MapJobCompleted, reply *MapJobComple
 		}
 	}
 	reply.Completed = true
-	fmt.Printf("mjc--> %+v", c.intermediateFiles)
+	return nil
+}
+
+func (c *Coordinator) ReduceJobCompleted(args *ReduceJobCompleted, reply *JobCompletedRes) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reduceStatus[args.PartitionKey] = 2
+	reply.Completed = true
 	return nil
 }
 
@@ -91,13 +142,7 @@ func (c *Coordinator) server() {
 func (c *Coordinator) Done() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	ret := false
-	for _, v := range c.mapStatus {
-		if v == 0 && len(c.reduceStatus) == 0 {
-			return ret
-		}
-	}
-	return !ret
+	return c.isReduceJobsCompleted()
 }
 
 //
@@ -114,7 +159,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		jobs[file] = 0
 	}
 	c.mapStatus = jobs
-	c.intermediateFiles = make(map[string][]string)
+	c.intermediateFiles = make(map[int][]string)
+	reduceStatus := make(map[int]int)
+	for i := 0; i < nReduce; i++ {
+		reduceStatus[i] = 0
+	}
+	c.reduceStatus = reduceStatus
 
 	c.server()
 	return &c

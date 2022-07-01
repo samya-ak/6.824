@@ -20,6 +20,13 @@ type MapJob struct {
 	InputFile    string
 	MapJobNumber int
 	ReducerCount int
+	AllCompleted bool
+}
+
+type ReduceJob struct {
+	IntermediateFiles []string
+	PartitionKey      int
+	AllCompleted      bool
 }
 
 type MapJobCompleted struct {
@@ -27,7 +34,11 @@ type MapJobCompleted struct {
 	IntermediateFiles []string
 }
 
-type MapJobCompletedRes struct {
+type ReduceJobCompleted struct {
+	PartitionKey int
+}
+
+type JobCompletedRes struct {
 	Completed bool
 }
 
