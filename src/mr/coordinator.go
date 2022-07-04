@@ -10,9 +10,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Coordinator struct {
+	// Status Code for mapStatus and reduceStatus:
+	// 0 - not started
+	// 1 - in progress
+	// 2 - completed
 	mapStatus         map[string]int
 	mapTaskId         int
 	reduceStatus      map[int]int
@@ -24,26 +29,40 @@ type Coordinator struct {
 // Your code here -- RPC handlers for the worker to call.
 func (c *Coordinator) GetReduceJob(args *ExampleArgs, reply *ReduceJob) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	for k, v := range c.reduceStatus {
 		if v == 0 {
 			c.reduceStatus[k] = 1
 			reply.IntermediateFiles = c.intermediateFiles[k]
 			reply.PartitionKey = k
-			return nil
+			break
 		}
 	}
 
 	reply.AllCompleted = c.isReduceJobsCompleted()
-	fmt.Printf("RedStatus>>>> %+v\n\n", c.reduceStatus)
-	fmt.Printf("RedReply>>>>> %+v\n\n", reply)
+	c.mu.Unlock()
+	// fmt.Printf("RedStatus>>>> %+v\n\n", c.reduceStatus)
+	// fmt.Printf("RedReply>>>>> %+v\n\n", reply)
+
+	// handle worker crash
+	if len(reply.IntermediateFiles) > 0 {
+		go func(reply *ReduceJob) {
+			<-time.After(time.Second * 10)
+			c.mu.Lock()
+			defer c.mu.Unlock()
+
+			if c.reduceStatus[reply.PartitionKey] == 1 {
+				fmt.Printf("Worker Crash- R %d \n\n", reply.PartitionKey)
+				// fmt.Printf("Status %d \n\n", c.reduceStatus[reply.PartitionKey])
+				c.reduceStatus[reply.PartitionKey] = 0
+			}
+		}(reply)
+	}
 	return nil
 }
 
 func (c *Coordinator) GetMapJob(args *ExampleArgs, reply *MapJob) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	for k, v := range c.mapStatus {
 		if v == 0 {
@@ -52,13 +71,29 @@ func (c *Coordinator) GetMapJob(args *ExampleArgs, reply *MapJob) error {
 			c.mapTaskId += 1
 			reply.MapJobNumber = c.mapTaskId
 			reply.ReducerCount = c.nReducer
-			return nil
+			break
 		}
 	}
 	reply.AllCompleted = c.isMapJobsCompleted()
-	fmt.Printf("Status>>>> %+v\n\n", c.mapStatus)
-	fmt.Printf("Reply>>>>> %+v\n\n", reply)
-	// return errors.New("map job not available")
+	// fmt.Printf("Status>>>> %+v\n\n", c.mapStatus)
+	// fmt.Printf("Reply>>>>> %+v\n\n", reply)
+
+	c.mu.Unlock()
+	// handle worker crash
+	// start timer only if job is assigned
+	if len(reply.InputFile) > 0 {
+		// fmt.Printf("Register Timer %+v \n\n", reply)
+		go func(reply *MapJob) {
+			<-time.After(time.Second * 10)
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			fmt.Printf("Worker Time out --> Check if task is completed %+v\n\n", reply)
+			if c.mapStatus[reply.InputFile] == 1 {
+				// fmt.Printf("Crashed: Status M%d \n\n", c.mapStatus[reply.InputFile])
+				c.mapStatus[reply.InputFile] = 0
+			}
+		}(reply)
+	}
 	return nil
 }
 
@@ -68,7 +103,6 @@ func (c *Coordinator) isMapJobsCompleted() bool {
 			return false
 		}
 	}
-	fmt.Printf("mjc--> %+v \n\n", c.intermediateFiles)
 	return true
 }
 
@@ -165,7 +199,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		reduceStatus[i] = 0
 	}
 	c.reduceStatus = reduceStatus
-
 	c.server()
 	return &c
 }

@@ -158,7 +158,7 @@ func RequestReduceJob() ReduceJob {
 
 	reply := ReduceJob{}
 	call("Coordinator.GetReduceJob", &args, &reply)
-	fmt.Printf("reply--> %+v \n\n", reply)
+	// fmt.Printf("reply r--> %+v \n\n", reply)
 	return reply
 }
 
@@ -167,7 +167,7 @@ func RequestMapJob() MapJob {
 
 	reply := MapJob{}
 	call("Coordinator.GetMapJob", &args, &reply)
-	fmt.Printf("reply--> %+v \n\n", reply)
+	// fmt.Printf("reply m--> %+v \n\n", reply)
 	return reply
 }
 
