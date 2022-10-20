@@ -20,7 +20,6 @@ package raft
 import (
 	//	"bytes"
 
-	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -481,7 +480,7 @@ func (rf *Raft) convertToCandidate(fromState string) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	fmt.Printf("From %s to Candidate >> %+v \n\n", fromState, rf)
+	// fmt.Printf("From %s to Candidate >> %+v \n\n", fromState, rf)
 	// this check is needed to prevent race
 	// while waiting on multiple channels
 	if rf.state != fromState {
