@@ -20,12 +20,14 @@ package raft
 import (
 	//	"bytes"
 
+	"bytes"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	//	"6.824/labgob"
+	"6.824/labgob"
 	"6.824/labrpc"
 )
 
@@ -110,13 +112,15 @@ func (rf *Raft) GetState() (int, bool) {
 //
 func (rf *Raft) persist() {
 	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	if e.Encode(rf.currentTerm) != nil ||
+		e.Encode(rf.votedFor) != nil ||
+		e.Encode(rf.logs) != nil {
+		panic("failed to encode the persistent state")
+	}
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -127,18 +131,14 @@ func (rf *Raft) readPersist(data []byte) {
 		return
 	}
 	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	if d.Decode(&rf.currentTerm) != nil ||
+		d.Decode(&rf.votedFor) != nil ||
+		d.Decode(&rf.logs) != nil {
+		panic("failed to decode persisted state")
+	}
 }
 
 //
@@ -188,6 +188,7 @@ func (rf *Raft) stepDownToFollower(term int) {
 	rf.state = FOLLOWER
 	rf.currentTerm = term
 	rf.votedFor = -1
+	rf.persist()
 
 	if state != FOLLOWER {
 		rf.sendToChannel(rf.stepDownCh, true)
@@ -229,6 +230,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if (rf.votedFor < 0 || rf.votedFor == args.CandidateId) && rf.isLogUpToDate(args.LastLogIndex, args.LastLogTerm) {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
+		rf.persist()
 		// fmt.Printf("After giving vote %+v %+v\n\n", rf, reply)
 		rf.sendToChannel(rf.grantVoteCh, true)
 	}
@@ -369,6 +371,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	args.Entries = args.Entries[j:]
 	rf.logs = append(rf.logs, args.Entries...)
 
+	rf.persist()
 	reply.Success = true
 
 	// update commit index to min(leaderCommit, lastIndex)
@@ -491,7 +494,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	term := rf.currentTerm
 	rf.logs = append(rf.logs, Log{term, command})
-
+	rf.persist()
 	return rf.getLastIndex(), term, true
 }
 
@@ -619,6 +622,7 @@ func (rf *Raft) convertToCandidate(fromState string) {
 	rf.currentTerm++
 	rf.votedFor = rf.me
 	rf.voteCount = 1
+	rf.persist()
 
 	rf.broadcastRequestVote()
 }
