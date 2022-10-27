@@ -296,12 +296,8 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	}
 
 	if reply.VoteGranted {
-		// fmt.Printf("Vote granted for %+v %+v %+v\n\n", rf, args, reply)
 		rf.voteCount++
 		if rf.voteCount == (len(rf.peers)/2)+1 {
-			// rf.state = LEADER
-			// rf.broadcastAppendEntries()
-			// fmt.Printf("After asking for vote %+v %+v \n\n", rf, reply)
 			rf.sendToChannel(rf.winElectCh, true)
 		}
 	}
@@ -349,6 +345,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.ConflictTerm = -1
 
 	if args.PrevLogIndex > lastIndex {
+		reply.ConflictIndex = lastIndex + 1
 		return
 	}
 
@@ -449,6 +446,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		rf.matchIndex[server] = rf.nextIndex[server] - 1
 	}
 
+	// update leader's commitIndex:
 	// if there exists an N such that N > commitIndex, a majority of
 	// matchIndex[i] >= N, and log[N].term == currentTerm, set commitIndex = N
 	for n := rf.getLastIndex(); n >= rf.commitIndex; n-- {
@@ -460,6 +458,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 				}
 			}
 		}
+		// majority of peers have synced logs with leader's log
 		if count > len(rf.peers)/2 {
 			rf.commitIndex = n
 			go rf.applyLogs()
@@ -563,7 +562,6 @@ func (rf *Raft) resetChannels() {
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		// _rf := rf
 		state := rf.state
 		rf.mu.Unlock()
 
@@ -573,6 +571,7 @@ func (rf *Raft) ticker() {
 
 		if state == LEADER {
 			// send append entries/ hearbeats periodically
+			// log.Printf("leader>>>> %+v \n\n", rf)
 			select {
 			case <-rf.stepDownCh:
 			case <-time.After(120 * time.Millisecond):
@@ -584,6 +583,7 @@ func (rf *Raft) ticker() {
 
 		// if leader has not sent heartbeats send request vote to all peers
 		if state == CANDIDATE {
+			// log.Printf("CANDIDATE>>>> %+v \n\n", rf)
 			select {
 			case <-rf.stepDownCh:
 			case <-rf.winElectCh:
@@ -594,6 +594,7 @@ func (rf *Raft) ticker() {
 		}
 
 		if state == FOLLOWER {
+			// log.Printf("FOLLOWER>>>> %+v \n\n", rf)
 			select {
 			case <-rf.grantVoteCh:
 			case <-rf.heartbeat:
@@ -623,7 +624,7 @@ func (rf *Raft) convertToCandidate(fromState string) {
 }
 
 func (rf *Raft) broadcastAppendEntries() {
-	// fmt.Printf("BROADCASTING APPEND ENTRIES>>>> %+v \n\n", rf)
+	// log.Printf("BROADCASTING APPEND ENTRIES>>>> %+v \n\n", rf)
 	if rf.state != LEADER {
 		return
 	}
@@ -652,8 +653,10 @@ func (rf *Raft) broadcastRequestVote() {
 	}
 
 	args := RequestVoteArgs{
-		Term:        rf.currentTerm,
-		CandidateId: rf.me,
+		Term:         rf.currentTerm,
+		CandidateId:  rf.me,
+		LastLogIndex: rf.getLastIndex(),
+		LastLogTerm:  rf.getLastTerm(),
 	}
 
 	for server := range rf.peers {
